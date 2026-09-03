@@ -460,7 +460,7 @@ export const useDemoAccountStore = create<DemoAccountState>()(
           }
           return { balance: v, martingale: newMartingale };
         }),
-      resetAccount: () =>
+      resetAccount: () => {
         set((s) => ({
           balance: DEFAULT_BALANCE,
           stage0Amount: s.stage0Amount,
@@ -471,7 +471,16 @@ export const useDemoAccountStore = create<DemoAccountState>()(
           martingale: {},
           openTrades: {},
           history: [],
-        })),
+        }));
+        // Bug fix: resetAccount() cleared the demo balance and trade
+        // history but left the analytics signal history ("ИСТОРИЯ
+        // СИГНАЛОВ") and StatusBar win/loss counters untouched. After a
+        // reset the balance restarts at $1000 (fresh wins push it above),
+        // while the stats still counted pre-reset signals — producing the
+        // impossible-looking state of balance > $1000 with more losses
+        // than wins. Clear both stores together so they stay consistent.
+        useAnalyticsStore.getState().clearSignalHistory();
+      },
     }),
     {
       name: 'demo-account',

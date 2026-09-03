@@ -563,6 +563,32 @@ describe('useDemoAccountStore — setters and reset', () => {
     expect(state.stageAmounts).toEqual([30, 60, 120]);
     expect(state.history).toEqual([]);
   });
+
+  it('resetAccount also clears analytics signal history and winRate (bug: balance>1000 with more losses than wins after reset)', () => {
+    // Reproduce the screenshot-6 bug: before a reset, the user accumulated
+    // more losses than wins in the analytics signal history. resetAccount()
+    // used to clear only the demo balance/trade history, leaving the
+    // StatusBar win/loss counters and signal history untouched — so after
+    // reset the balance was back at $1000 (fresh wins pushed it above),
+    // while the stats still showed the old pre-reset losses dominating.
+    useAnalyticsStore.getState().clearAll();
+    useAnalyticsStore.getState().addSignal(makeSignal('sig-old-win', 'EURUSD', TF, 100000));
+    useAnalyticsStore.getState().addSignal(makeSignal('sig-old-loss-1', 'EURUSD', TF, 100100));
+    useAnalyticsStore.getState().addSignal(makeSignal('sig-old-loss-2', 'EURUSD', TF, 100200));
+    useAnalyticsStore.getState().updateSignalOutcome('sig-old-win', 'win');
+    useAnalyticsStore.getState().updateSignalOutcome('sig-old-loss-1', 'loss');
+    useAnalyticsStore.getState().updateSignalOutcome('sig-old-loss-2', 'loss');
+    useAnalyticsStore.getState().recomputeStats();
+
+    expect(useAnalyticsStore.getState().signals.length).toBe(3);
+    expect(useAnalyticsStore.getState().winRate).toBe(1 / 3);
+
+    useDemoAccountStore.getState().resetAccount();
+
+    expect(useAnalyticsStore.getState().signals).toEqual([]);
+    expect(useAnalyticsStore.getState().winRate).toBeNull();
+    expect(useAnalyticsStore.getState().calibrationSampleCount).toBe(0);
+  });
 });
 
 describe('useDemoAccountStore — orphaned trade resolution', () => {
