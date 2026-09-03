@@ -90,13 +90,15 @@ export function MobileNav({ fullSnapshot, currentSignal }: MobileNavProps) {
         )}
         style={{ height: '72dvh' }}
       >
-        <div
-          className="flex h-full flex-col rounded-t-3xl border-t border-base-700/60 bg-base-950/98 shadow-2xl"
-          onTouchStart={handleTouchStart}
-          onTouchMove={handleTouchMove}
-        >
-          {/* Grab handle + close button */}
-          <div className="relative flex items-center justify-center px-4 pb-1 pt-3">
+        <div className="flex h-full flex-col rounded-t-3xl border-t border-base-700/60 bg-base-950/98 shadow-2xl">
+          {/* Grab handle + close button — swipe-down-to-close only works
+              from here, not from the scrollable content below, so that
+              scrolling up inside a tab doesn't collapse the drawer. */}
+          <div
+            className="relative flex items-center justify-center px-4 pb-1 pt-3"
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+          >
             <div className="h-1 w-10 rounded-full bg-base-600" />
             <button
               onClick={closeDrawer}

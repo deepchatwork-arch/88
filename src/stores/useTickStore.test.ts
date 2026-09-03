@@ -30,6 +30,7 @@ const {
     setCalibrationState: vi.fn(),
     setConnectionStatus: vi.fn(),
     clearAll: vi.fn(),
+    clearSignalHistory: vi.fn(),
     resetSession: vi.fn(),
   };
   return {
