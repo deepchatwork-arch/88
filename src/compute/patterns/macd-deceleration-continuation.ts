@@ -1,9 +1,9 @@
 import type { Candle, PatternResult, SignalStrength, IndicatorSnapshot } from '@/types/domain';
 import { computeStructure } from '@/compute/indicators/trend-structure';
-import { superOrderBlocks } from '@/compute/indicators/super-order-block';
 import { macd } from '@/compute/indicators/macd';
 import type { SessionRegime } from '@/compute/session-regime';
 import { isHighLiquiditySession } from '@/compute/session-regime';
+import type { SmartMoneyResult } from '@/compute/indicators/smart-money';
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
@@ -85,6 +85,7 @@ export function detectMacdDecelerationContinuation(
   snapshot?: IndicatorSnapshot,
   session?: SessionRegime,
   macdConfig?: { fast: number; slow: number; signal: number },
+  smartMoney?: SmartMoneyResult,
 ): PatternResult | null {
   if (candles.length < 35) return null;
 
@@ -299,13 +300,17 @@ export function detectMacdDecelerationContinuation(
   // require structure confluence (per the OB unification fix) since this is
   // still just a soft +0.15 confidence bonus, not a hard gate — a sparser
   // set of qualifying blocks here only means the bonus applies less often.
-  const blocks = superOrderBlocks(candles, 100, {
-    structure: struct, atrValue: snapshot?.atr ?? undefined, requireStructureConfluence: true,
-  });
+  // Fix #1: Use smartMoney.orderBlocks instead of superOrderBlocks. The
+  // old call used requireStructureConfluence: true which gates against the
+  // current structure snapshot — smartMoney already has correct formation-
+  // time structure confluence (hasStructureConfirmation). This is a soft
+  // +0.15 confidence bonus, not a hard gate, so a sparser block list only
+  // means the bonus applies less often.
+  const blocks = smartMoney?.orderBlocks ?? [];
   const hasTrendBlock = blocks.some((b) =>
     b.status !== 'broken' &&
-    b.direction === (direction === 'buy' ? 'bullish' : 'bearish') &&
-    Math.abs(last.close - (direction === 'buy' ? b.low : b.high)) <= (b.high - b.low) * 3,
+    b.type === (direction === 'buy' ? 'bullish' : 'bearish') &&
+    Math.abs(last.close - (direction === 'buy' ? b.bottom : b.top)) <= (b.top - b.bottom) * 3,
   );
   if (hasTrendBlock) confidence = clamp01(confidence + 0.15);
 

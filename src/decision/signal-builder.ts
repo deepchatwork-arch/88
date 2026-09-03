@@ -13,7 +13,7 @@ import type {
 } from '@/types/domain';
 import { DEFAULT_SIGNAL_TOGGLES } from '@/types/domain';
 import type { CalibrationModel } from './calibration-model';
-import { estimateTradeLevels, computeBreakoutTradeLevels, computeLiquiditySweepTradeLevels, fallbackAtr } from './trade-levels';
+import { estimateTradeLevels, computeBreakoutTradeLevels, computeLiquiditySweepTradeLevels, computeOrderBlockContinuationTradeLevels, fallbackAtr } from './trade-levels';
 import { recommendedExpiry } from './recommended-expiry';
 import { estimateSpread } from './spread-estimate';
 import { computeDirectionScore } from './direction-prediction';
@@ -296,6 +296,17 @@ export function buildSignal(params: BuildSignalParams): Signal | null {
       ? evidence.pattern
       : null;
 
+  // order-block-continuation gets a structural TP (audit finding #3):
+  // findTargetZone() in the detector already computes the nearest OB/FVG/S-R
+  // level in the trade direction, but it was never wired through — the signal
+  // fell back to a flat ATR×2 TP. Now we use the structural target when it
+  // gives RR >= 1.5, with the same ATR×2 fallback otherwise.
+  const obcPattern =
+    evidence.pattern?.name === 'order-block-continuation' &&
+    evidence.pattern.targetZone !== undefined
+      ? evidence.pattern
+      : null;
+
   const levels = impulseBreakoutPattern
     ? computeBreakoutTradeLevels(
         tradeEntryPrice,
@@ -312,6 +323,14 @@ export function buildSignal(params: BuildSignalParams): Signal | null {
         liquiditySweepReactionPattern.sweepHigh!,
         liquiditySweepReactionPattern.oppositeZonePrice ?? null,
         atrValue,
+      )
+    : obcPattern
+    ? computeOrderBlockContinuationTradeLevels(
+        tradeEntryPrice,
+        evidence.direction,
+        obcPattern.targetZone,
+        atrValue,
+        atrMultiplier,
       )
     : estimateTradeLevels(tradeEntryPrice, atrValue, atrMultiplier, evidence.direction);
 

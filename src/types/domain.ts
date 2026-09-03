@@ -148,6 +148,11 @@ export interface PatternResult {
   // in the direction the market was already moving) or a reversal right at a
   // significant swing level (Spring/Upthrust). See audit finding #7.
   setupType?: 'continuation' | 'reversal-at-key-level';
+  // Order-block-continuation only — nearest structural level (OB/FVG/S-R)
+  // in the trade direction, precomputed by findTargetZone() inside the
+  // detector. Used by computeOrderBlockContinuationTradeLevels to place a
+  // structural take-profit instead of a flat ATR×2. See audit finding #3.
+  targetZone?: number;
 }
 
 export interface MarketStructure {

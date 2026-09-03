@@ -122,6 +122,32 @@ export function computeLiquiditySweepTradeLevels(
   return { entry: entryPrice, stopLoss, takeProfit: fallbackTakeProfit };
 }
 
+// Structural TP for order-block-continuation (audit finding #3: targetZone
+// was computed by findTargetZone() in the detector but never used — the signal
+// fell through to estimateTradeLevels with a flat ATR×2 TP that ignores real
+// market structure). Uses the same pattern as computeLiquiditySweepTradeLevels:
+// structural target is used only if it yields RR >= minRR, otherwise falls back
+// to the shared computeTradeLevels TP. Stop loss stays at the shared ATR-based
+// level — OBC doesn't have a structural stop like breakout/sweep do.
+export function computeOrderBlockContinuationTradeLevels(
+  entryPrice: number,
+  direction: 'buy' | 'sell',
+  targetZone: number | undefined,
+  atrValue: number,
+  atrMultiplier: number,
+  minRR: number = 1.5,
+): TradeLevels {
+  const base = computeTradeLevels(entryPrice, atrValue, atrMultiplier, direction);
+  if (targetZone === undefined) return base;
+
+  const stopDistance = Math.abs(entryPrice - base.stopLoss);
+  const rewardDistance = Math.abs(targetZone - entryPrice);
+  if (stopDistance > 0 && rewardDistance / stopDistance >= minRR) {
+    return { ...base, takeProfit: targetZone };
+  }
+  return base;
+}
+
 export function avgRangeFromSnapshot(
   candles: { high: number; low: number }[],
   period: number,

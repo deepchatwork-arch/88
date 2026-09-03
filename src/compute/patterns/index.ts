@@ -249,8 +249,8 @@ export function detectAllPatterns(
     if (p) raw.push(p);
   }
   if (has('strong-order-block-reaction')) { const p = detectStrongOrderBlockReaction(candles, ctx.structure, ctx.session, ctx.smartMoney, atrPeriod); if (p) raw.push(p); }
-  if (has('order-block-continuation')) { const p = detectOrderBlockContinuation(candles, snapshot, ctx.session, ctx.structure); if (p) raw.push(p); }
-  if (has('macd-deceleration-continuation')) { const p = detectMacdDecelerationContinuation(candles, snapshot, ctx.session, macdConfig); if (p) raw.push(p); }
+  if (has('order-block-continuation')) { const p = detectOrderBlockContinuation(candles, snapshot, ctx.session, ctx.structure, ctx.smartMoney); if (p) raw.push(p); }
+  if (has('macd-deceleration-continuation')) { const p = detectMacdDecelerationContinuation(candles, snapshot, ctx.session, macdConfig, ctx.smartMoney); if (p) raw.push(p); }
 
   // "Стратегии на FVG" — Strategies A-D (see fvg-strategies-shared.ts for
   // the shared scoring engine sourced from the strategy document).

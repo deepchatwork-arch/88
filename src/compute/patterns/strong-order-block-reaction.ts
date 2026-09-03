@@ -1,5 +1,4 @@
 import type { Candle, PatternResult, SignalStrength, MarketStructure } from '@/types/domain';
-import { superOrderBlocks } from '@/compute/indicators/super-order-block';
 import { atr } from '@/compute/indicators/atr';
 import { lastNonNull } from '@/compute/indicators/helpers';
 import type { SessionRegime } from '@/compute/session-regime';
@@ -43,17 +42,15 @@ export function detectStrongOrderBlockReaction(
   const atrValue = lastNonNull(atrArr);
   if (atrValue === null || atrValue <= 0) return null;
 
-  // Reuse this pattern's own ATR/structure so the base displacement gate in
-  // super-order-block.ts lines up with the atrPeriod passed in here, instead
-  // of super-order-block.ts silently recomputing its own ATR(14).
-  // requireStructureConfluence is now on: a block must have a real BOS/CHoCH
-  // behind it to be considered at all, on top of (not instead of) the HTF
-  // bias hard-skip below, which checks the reaction's own direction against
-  // structure.trend specifically.
-  const blocks = superOrderBlocks(candles, 100, {
-    atrValue, atrPeriod, structure, requireStructureConfluence: true,
-  });
-  const activeBlocks = blocks.filter((b) => b.status !== 'broken');
+  // Fix #1: Use smartMoney.orderBlocks (correct formation-time structure
+  // confluence) instead of superOrderBlocks (which gates against the current
+  // structure snapshot). smartMoney is already passed as the 4th parameter
+  // but was previously unused — the detector still called superOrderBlocks
+  // internally. Now we consume the pre-computed orderBlocks from smartMoney.
+  const allBlocks = smartMoney?.orderBlocks ?? [];
+  const timeIndex = new Map<number, number>();
+  candles.forEach((c, idx) => timeIndex.set(c.time, idx));
+  const activeBlocks = allBlocks.filter((b) => b.status !== 'broken');
   if (activeBlocks.length === 0) return null;
 
   const last = candles[candles.length - 1];
@@ -68,11 +65,11 @@ export function detectStrongOrderBlockReaction(
   let bestResult: PatternResult | null = null;
 
   for (const block of activeBlocks) {
-    const direction: 'buy' | 'sell' = block.direction === 'bullish' ? 'buy' : 'sell';
+    const direction: 'buy' | 'sell' = block.type === 'bullish' ? 'buy' : 'sell';
     const reacted =
       direction === 'buy'
-        ? prev.low <= block.high && last.close > block.high
-        : prev.high >= block.low && last.close < block.low;
+        ? prev.low <= block.top && last.close > block.top
+        : prev.high >= block.bottom && last.close < block.bottom;
     if (!reacted) continue;
 
     // 1. HTF bias (hard requirement): block direction must agree with the
@@ -86,11 +83,10 @@ export function detectStrongOrderBlockReaction(
     // 2. Displacement that formed the block must be >= 2x ATR (a stronger
     //    bar than the >= 1.2x ATR baseline super-order-block.ts already
     //    requires just to form a block at all — this is the "extra strong"
-    //    scoring tier). block.index/time are set at detection time, so this
-    //    no longer relies on re-matching the candle by OHLC value, which
-    //    silently picked the wrong candle whenever two candles shared
-    //    identical OHLC.
-    const blockIdx = block.index;
+    //    scoring tier). SmartMoneyOrderBlock has no `index` field — look up
+    //    the candle index via the block's `time` field against a pre-built
+    //    Map for O(1) access instead of candles.findIndex() per block.
+    const blockIdx = timeIndex.get(block.time) ?? -1;
     if (blockIdx >= 0 && blockIdx + 1 < candles.length) {
       const impulse = candles[blockIdx + 1];
       const impulseRange = impulse.high - impulse.low;

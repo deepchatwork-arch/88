@@ -1,10 +1,10 @@
 import type { Candle, PatternResult, SignalStrength, IndicatorSnapshot, MarketStructure } from '@/types/domain';
-import { superOrderBlocks } from '@/compute/indicators/super-order-block';
 import { orderBlockStrength, detectImbalances } from '@/compute/indicators/order-block-strength';
 import { supportResistance } from '@/compute/indicators/support-resistance';
 import { macd } from '@/compute/indicators/macd';
 import type { SessionRegime } from '@/compute/session-regime';
 import { isHighLiquiditySession } from '@/compute/session-regime';
+import type { SmartMoneyResult, SmartMoneyOrderBlock } from '@/compute/indicators/smart-money';
 
 export interface OBCResult extends PatternResult {
   targetZone?: number;
@@ -31,19 +31,26 @@ export function detectOrderBlockContinuation(
   snapshot?: IndicatorSnapshot,
   session?: SessionRegime,
   structure?: MarketStructure,
+  smartMoney?: SmartMoneyResult,
 ): OBCResult | null {
   if (candles.length < 30) return null;
 
-  // Displacement-gated by default (see super-order-block.ts). Structure
-  // confirmation is now also mandatory whenever `structure` is available —
-  // per the OB unification fix, a block without a same-direction BOS/CHoCH
-  // at its formation isn't treated as tradeable here, not just "worth a
-  // small bonus" as before.
-  const blocks = superOrderBlocks(candles, 100, {
-    structure,
-    requireStructureConfluence: structure !== undefined,
-  });
-  const untestedBlocks = blocks.filter((b) => b.status === 'untested' || b.status === 'tested-hold');
+  // Fix #1: Use smartMoney.orderBlocks (correct formation-time structure
+  // confluence via hasStructureConfirmation) instead of superOrderBlocks
+  // (which gates against the current structure snapshot, not the snapshot
+  // at the block's own formation — see smart-money.ts hasStructureConfirmation).
+  // SmartMoneyOrderBlock uses top/bottom instead of high/low, type instead of
+  // direction, and time instead of index — adapt accordingly.
+  const allBlocks = smartMoney?.orderBlocks ?? [];
+  const timeIndex = new Map<number, number>();
+  candles.forEach((c, idx) => timeIndex.set(c.time, idx));
+  const untestedBlocks: { block: SmartMoneyOrderBlock; blockIdx: number }[] = [];
+  for (const b of allBlocks) {
+    if (b.status !== 'untested' && b.status !== 'tested-hold') continue;
+    const blockIdx = timeIndex.get(b.time) ?? -1;
+    if (blockIdx < 0 || blockIdx >= candles.length) continue;
+    untestedBlocks.push({ block: b, blockIdx });
+  }
   if (untestedBlocks.length === 0) return null;
 
   const last = candles[candles.length - 1];
@@ -53,26 +60,31 @@ export function detectOrderBlockContinuation(
   let bestResult: OBCResult | null = null;
   let bestConfidence = 0;
 
-  for (const block of untestedBlocks) {
-    // block.index/time are set at detection time in super-order-block.ts —
-    // previously re-derived here via OHLC-value matching, which silently
-    // picked the wrong candle whenever two candles shared identical OHLC.
-    const blockIdx = block.index;
-    if (blockIdx < 0 || blockIdx >= candles.length) continue;
+  for (const { block, blockIdx } of untestedBlocks) {
 
     const candlesSinceFormation = candles.length - 1 - blockIdx;
     if (candlesSinceFormation < 1 || candlesSinceFormation > MAX_FRESH_CANDLES) continue;
 
-    const windowStart = Math.max(0, blockIdx - 1);
-    const windowEnd = Math.min(histogram.length, windowStart + N_BARS);
+    // Fix #2: Retrospective window — N_BARS bars BEFORE the block, not
+    // "blockIdx-1, plus 12 forward". The old forward window structurally
+    // excluded the freshest (1-bar-old) blocks because there weren't enough
+    // future bars to fill the minimum. A retrospective window decouples
+    // freshness from sample size.
+    const windowEnd = blockIdx;
+    const windowStart = Math.max(0, blockIdx - N_BARS);
     const windowAbs: number[] = [];
     for (let j = windowStart; j < windowEnd; j++) {
       if (histogram[j] !== null) windowAbs.push(Math.abs(histogram[j] as number));
     }
     if (windowAbs.length < 4) continue;
 
-    const obHistIdx = Math.max(0, Math.min(windowAbs.length - 1, blockIdx - windowStart));
-    const obHistValue = windowAbs[obHistIdx] ?? 0;
+    // Fix #4: Read the block's own MACD histogram value directly from the
+    // source array instead of indexing into the null-filtered windowAbs.
+    // The old code computed obHistIdx as blockIdx - windowStart and used it
+    // on windowAbs, but null entries in the original array shift all
+    // indices in windowAbs, causing obHistIdx to point at the wrong bar.
+    const obHistRaw = histogram[blockIdx];
+    const obHistValue = obHistRaw !== null ? Math.abs(obHistRaw) : 0;
     const maxHist = Math.max(...windowAbs);
     const avgHist = windowAbs.reduce((a, b) => a + b, 0) / windowAbs.length;
 
@@ -80,7 +92,7 @@ export function detectOrderBlockContinuation(
     if (obHistValue < maxHist * 0.8) continue;
 
     const confidenceRaw = clamp01(avgHist > 0 ? obHistValue / (avgHist * 2) : 0.5);
-    const direction = block.direction === 'bullish' ? 'buy' : 'sell';
+    const direction = block.type === 'bullish' ? 'buy' : 'sell';
 
     // RSI-extreme hard filter (TIER 3, п.12): a fresh continuation block
     // entered while RSI already sits in an extreme reading is a documented
@@ -99,7 +111,7 @@ export function detectOrderBlockContinuation(
     // the fast EMA relative to its direction (bullish block above emaFast,
     // bearish block below it).
     if (snapshot?.emaFast != null) {
-      const emaAligned = direction === 'buy' ? block.low > snapshot.emaFast : block.high < snapshot.emaFast;
+      const emaAligned = direction === 'buy' ? block.bottom > snapshot.emaFast : block.top < snapshot.emaFast;
       if (emaAligned) confidence *= 1.1;
     }
 
@@ -113,11 +125,10 @@ export function detectOrderBlockContinuation(
       if (bandWidth > snapshot.atr * 2) confidence *= 1.05;
     }
 
-    // Structure confluence bonus: kept for backward-compatible confidence
-    // shape, though it's now a no-op in practice — blocks without structure
-    // confluence are already excluded above whenever `structure` is passed
-    // (requireStructureConfluence), so every surviving block here has
-    // hasStructureConfluence === true.
+    // Structure confluence bonus: smartMoney.orderBlocks already gates on
+    // hasStructureConfluence by default (requireStructureConfluence=true in
+    // calcSmartMoney), so every surviving block here has it — this is now
+    // always true, kept for confidence shape consistency.
     if (block.hasStructureConfluence) confidence *= 1.1;
 
     confidence = clamp01(confidence);
